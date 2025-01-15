@@ -4,35 +4,74 @@
 
 ```
 @startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
-Person(user, "Клиент", "Пользователь системы InsureTech")
-System_Boundary(InsureTech, "InsureTech System") {
-    Container(core_app, "Core App", "Kotlin + SpringBoot", "Основная бизнес-логика и API для веб-приложения")
-    Container(client_info, "Client Info", "Kotlin + SpringBoot", "Сервис учета клиентских данных")
-    Container(ins_product_aggregator, "Ins Product Aggregator", "Kotlin + SpringBoot", "Агрегация продуктов")
-    Container(ins_comp_settlement, "Ins Comp Settlement", "Kotlin + SpringBoot", "Сервис оформления страховок")
-    Container(osago_aggregator, "OSAGO Aggregator", "Kotlin + SpringBoot", "Сервис для работы с ОСАГО, предоставляет данные и тарифы")
-    ContainerDb(core_db, "Core DB", "PostgreSQL", "Тарифы и продукты")
-    ContainerDb(ins_comp_settlement_db, "Ins Comp Settlement DB", "PostgreSQL", "Информация о клиентах и полисах")
-    ContainerDb(osago_db, "OSAGO DB", "PostgreSQL", "Тарифы ОСАГО и связанные данные")
-    Container(kafka, "Kafka", "Event-Streaming", "Механизм асинхронной обработки событий")
+actor Client as client
+
+package "InsureTech Web" {
+    component "Web App" as webApp <<Container: JavaScript, React>>
 }
 
-Rel(user, core_app, "HTTP")
-Rel(core_app, client_info, "Асинхронный вызов через Kafka")
-Rel(core_app, ins_product_aggregator, "Асинхронный вызов через Kafka")
-Rel(core_app, ins_comp_settlement, "HTTP")
-Rel(core_app, core_db, "Запись/чтение данных")
-Rel(ins_comp_settlement, ins_comp_settlement_db, "Запись/чтение данных")
-Rel(core_app, osago_aggregator, "gRPC", "Интеграция с использованием gRPC для минимизации задержек и повышения эффективности")
-Rel(osago_aggregator, osago_db, "Запись/чтение данных")
-
-Boundary(SafetyPatterns, "Паттерны отказоустойчивости") {
-    Rel_Back(core_app, osago_aggregator, "Circuit Breaker", "Для предотвращения отказов при сбоях в osago-aggregator")
-    Rel_Back(core_app, ins_product_aggregator, "Rate Limiter", "Для контроля количества запросов")
-    Rel_Back(core_app, client_info, "Retry + Timeout", "Повторение запросов при временных сбоях")
+package "InsureTech Prod" {
+    component "Core App" as coreApp <<Container: Kotlin, SpringBoot>>
+    component "Core DB" as coreDB <<Container: PostgreSQL>>
+    component "Client Info" as clientInfo <<Container: Kotlin, SpringBoot>>
+    component "Product Aggregator" as productAggregator <<Container: Kotlin, SpringBoot>>
+    component "Settlement Service" as settlementService <<Container: Kotlin, SpringBoot>>
+    component "Settlement DB" as settlementDB <<Container: PostgreSQL>>
+    component "OSAGO Aggregator" as osagoAggregator <<Container: Kotlin, SpringBoot>>
+    database "OSAGO DB" as osagoDB <<PostgreSQL>>
 }
+
+package "Payment Service" {
+    component "External Payment" as paymentService <<Software System>>
+}
+
+package "Partner Systems" {
+    component "Partner System" as partnerSystem <<Software System>>
+}
+
+package "Insurance Companies" {
+    component "Insurance Systems" as insuranceSystems <<Software System>>
+}
+
+package "Event Streaming" {
+    component "Kafka" as kafka <<Event Broker>>
+    queue "tariff-update-topic" as tariffTopic
+    queue "policy-creation-topic" as policyTopic
+    queue "settlement-update-topic" as settlementTopic
+}
+
+package "Transactional Outbox" {
+    database "Outbox Table" as outboxTable
+}
+
+client --> webApp: "Interacts"
+webApp --> coreApp: "GraphQL Queries/Mutations"
+coreApp --> productAggregator: "Get Product Tariffs"
+coreApp -> kafka: "Publishes Events (Policy Creation, Settlement Updates)"
+coreApp -> outboxTable: "Writes Events"
+outboxTable -> kafka: "Publishes Events"
+coreApp --> coreDB: "Reads/Writes"
+coreApp --> osagoAggregator: "Get OSAGO Tariffs [gRPC]"
+osagoAggregator --> osagoDB: "Reads/Writes"
+osagoAggregator --> insuranceSystems: "Fetch Tariffs [REST/SOAP]"
+
+productAggregator -> tariffTopic: "Subscribes to Tariff Updates"
+productAggregator --> insuranceSystems: "Requests Tariffs [REST/SOAP/GraphQL]"
+
+settlementService -> settlementTopic: "Subscribes to Settlement Events"
+settlementService --> settlementDB: "Reads/Writes"
+settlementService --> insuranceSystems: "Processes Settlements [REST]"
+
+paymentService --> coreApp: "Processes Payments [REST]"
+partnerSystem --> coreApp: "Partners Register Policies [REST]"
+
+note right of coreApp
+  - Rate Limiting for external API calls
+  - Circuit Breaker for osagoAggregator
+  - Retry with exponential backoff
+  - Timeout for responses
+end note
 
 @enduml
 
