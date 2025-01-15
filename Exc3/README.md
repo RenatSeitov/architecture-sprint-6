@@ -43,25 +43,62 @@
 
 ```
 @startuml
-!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
 
-Person(user, "Клиент", "Пользователь системы InsureTech")
-System_Boundary(InsureTech, "InsureTech System") {
-    Container(core_app, "Core App", "Kotlin + SpringBoot", "Основная бизнес-логика")
-    Container(client_info, "Client Info", "Kotlin + SpringBoot", "Сервис учета клиентских данных")
-    Container(ins_product_aggregator, "Ins Product Aggregator", "Kotlin + SpringBoot", "Агрегация продуктов")
-    Container(ins_comp_settlement, "Ins Comp Settlement", "Kotlin + SpringBoot", "Сервис оформления страховок")
-    ContainerDb(core_db, "Core DB", "PostgreSQL", "Тарифы и продукты")
-    ContainerDb(ins_comp_settlement_db, "Ins Comp Settlement DB", "PostgreSQL", "Информация о клиентах и полисах")
-    Container(kafka, "Kafka", "Event-Streaming", "Механизм асинхронной обработки событий")
+actor Client as client
+
+package "InsureTech Web" {
+    component "Web App" as webApp <<Container: JavaScript, React>>
 }
 
-Rel(user, core_app, "HTTP")
-Rel(core_app, client_info, "Асинхронный вызов через Kafka")
-Rel(core_app, ins_product_aggregator, "Асинхронный вызов через Kafka")
-Rel(core_app, ins_comp_settlement, "HTTP")
-Rel(core_app, core_db, "Запись/чтение данных")
-Rel(ins_comp_settlement, ins_comp_settlement_db, "Запись/чтение данных")
+package "InsureTech Prod" {
+    component "Core App" as coreApp <<Container: Kotlin, SpringBoot>>
+    component "Core DB" as coreDB <<Container: PostgreSQL>>
+    component "Client Info" as clientInfo <<Container: Kotlin, SpringBoot>>
+    component "Product Aggregator" as productAggregator <<Container: Kotlin, SpringBoot>>
+    component "Settlement Service" as settlementService <<Container: Kotlin, SpringBoot>>
+    component "Settlement DB" as settlementDB <<Container: PostgreSQL>>
+}
+
+package "Payment Service" {
+    component "External Payment" as paymentService <<Software System>>
+}
+
+package "Partner Systems" {
+    component "Partner System" as partnerSystem <<Software System>>
+}
+
+package "Insurance Companies" {
+    component "Insurance Systems" as insuranceSystems <<Software System>>
+}
+
+package "Event Streaming" {
+    component "Kafka" as kafka <<Event Broker>>
+    queue "tariff-update-topic" as tariffTopic
+    queue "policy-creation-topic" as policyTopic
+    queue "settlement-update-topic" as settlementTopic
+}
+
+package "Transactional Outbox" {
+    database "Outbox Table" as outboxTable
+}
+
+client --> webApp: "Interacts"
+webApp --> coreApp: "Get Tariffs / Create Policies [REST]"
+coreApp --> productAggregator: "Get Product Tariffs"
+coreApp -> kafka: "Publishes Events (Policy Creation, Settlement Updates)"
+coreApp -> outboxTable: "Writes Events"
+outboxTable -> kafka: "Publishes Events"
+coreApp --> coreDB: "Reads/Writes"
+
+productAggregator -> tariffTopic: "Subscribes to Tariff Updates"
+productAggregator --> insuranceSystems: "Requests Tariffs [REST/SOAP/GraphQL]"
+
+settlementService -> settlementTopic: "Subscribes to Settlement Events"
+settlementService --> settlementDB: "Reads/Writes"
+settlementService --> insuranceSystems: "Processes Settlements [REST]"
+
+paymentService --> coreApp: "Processes Payments [REST]"
+partnerSystem --> coreApp: "Partners Register Policies [REST]"
 
 @enduml
 ```
